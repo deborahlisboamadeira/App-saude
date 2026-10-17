@@ -4,6 +4,7 @@
 
 const CHAVE_DADOS = 'app-saude:v1';
 const MODELO = 'claude-opus-5-5';
+const ML_COPO = 250;
 
 // MET de cada atividade (Compendium of Physical Activities, valores aproximados)
 const ATIVIDADES = [
@@ -26,18 +27,14 @@ const ATIVIDADES = [
   ['outro', 'Outra atividade moderada', 4.0],
 ];
 
+const PERFIL_PADRAO = { altura: null, idade: null, sexo: '', nivel: 1.2, objetivo: 0, protKg: 1.6, aguaMlKg: 35 };
+
 function carregar() {
-  try {
-    const salvo = JSON.parse(localStorage.getItem(CHAVE_DADOS));
-    if (salvo) return { pesos: [], comidas: [], atividades: [], perfil: {}, chave: '', ...salvo };
-  } catch (e) { /* dados corrompidos: começa do zero */ }
-  return {
-    perfil: { altura: null, idade: null, sexo: '', nivel: 1.2, objetivo: 0, protKg: 1.6 },
-    pesos: [],
-    comidas: [],
-    atividades: [],
-    chave: '',
-  };
+  let salvo = null;
+  try { salvo = JSON.parse(localStorage.getItem(CHAVE_DADOS)); } catch (e) { /* dados corrompidos: começa do zero */ }
+  const base = { pesos: [], comidas: [], atividades: [], agua: {}, chave: '', ...(salvo || {}) };
+  base.perfil = { ...PERFIL_PADRAO, ...(base.perfil || {}) };
+  return base;
 }
 
 let dados = carregar();
@@ -56,9 +53,15 @@ const novoId = () => Date.now().toString(36) + Math.random().toString(36).slice(
 
 const $ = (id) => document.getElementById(id);
 
-function hoje() {
-  const d = new Date();
+function isoDe(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+const hoje = () => isoDe(new Date());
+
+function diasAtras(n) {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return isoDe(d);
 }
 
 function dataCurta(iso) {
@@ -83,9 +86,11 @@ function toast(msg) {
 
 // ---------- Cálculos ----------
 
+const pesosOrdenados = () => [...dados.pesos].sort((a, b) => a.data.localeCompare(b.data) || a.id.localeCompare(b.id));
+
 function pesoAtual() {
-  if (!dados.pesos.length) return null;
-  return [...dados.pesos].sort((a, b) => a.data.localeCompare(b.data) || a.id.localeCompare(b.id)).at(-1).kg;
+  const l = pesosOrdenados();
+  return l.length ? l.at(-1).kg : null;
 }
 
 function imc(kg, cm) {
@@ -108,7 +113,7 @@ function categoriaImc(v) {
 function metaCalorias() {
   const p = dados.perfil;
   const kg = pesoAtual();
-  if (!kg || !p.altura || !p.idade) return null;
+  if (!kg || !p.altura || !p.idade || !p.sexo) return null;
   const tmb = 10 * kg + 6.25 * p.altura - 5 * p.idade + (p.sexo === 'm' ? 5 : -161);
   return { tmb, meta: Math.round(tmb * Number(p.nivel) + Number(p.objetivo)) };
 }
@@ -118,6 +123,11 @@ function metaProteina() {
   return kg ? Math.round(kg * Number(dados.perfil.protKg || 1.6)) : null;
 }
 
+function metaCopos() {
+  const kg = pesoAtual();
+  return kg ? Math.max(1, Math.round((kg * Number(dados.perfil.aguaMlKg || 35)) / ML_COPO)) : 8;
+}
+
 // Calorias líquidas do exercício (desconta o gasto de repouso, que já está na meta)
 function estimarKcal(tipo, minutos) {
   const kg = pesoAtual() || 70;
@@ -125,9 +135,32 @@ function estimarKcal(tipo, minutos) {
   return Math.round(Math.max(met - 1, 0) * kg * (minutos / 60));
 }
 
+function totaisDoDia(dia) {
+  const comidas = dados.comidas.filter((c) => c.data === dia);
+  const ativs = dados.atividades.filter((a) => a.data === dia);
+  return {
+    comidas,
+    ativs,
+    comi: comidas.reduce((s, c) => s + Number(c.kcal), 0),
+    prot: comidas.reduce((s, c) => s + Number(c.prot), 0),
+    queimei: ativs.reduce((s, a) => s + Number(a.kcal), 0),
+    minutos: ativs.reduce((s, a) => s + Number(a.min || 0), 0),
+    copos: Number(dados.agua[dia] || 0),
+  };
+}
+
+// Dias seguidos com pelo menos uma refeição lançada (conta a partir de ontem se hoje ainda está vazio)
+function sequenciaDias() {
+  const dias = new Set(dados.comidas.map((c) => c.data));
+  let n = 0;
+  let i = dias.has(hoje()) ? 0 : 1;
+  while (dias.has(diasAtras(i))) { n++; i++; }
+  return n;
+}
+
 // ---------- Telas ----------
 
-const TITULOS = { inicio: 'Hoje', peso: 'Peso', comida: 'Comida', atividade: 'Atividade', ajustes: 'Ajustes' };
+const TITULOS = { inicio: 'Resumo', peso: 'Peso', comida: 'Comida', atividade: 'Atividade', ajustes: 'Ajustes' };
 
 function irPara(tela) {
   document.querySelectorAll('.tela').forEach((s) => s.classList.toggle('ativa', s.id === 'tela-' + tela));
@@ -136,11 +169,34 @@ function irPara(tela) {
   for (const id of ['peso-data', 'comida-data', 'ativ-data']) if (!$(id).value) $(id).value = hoje();
   if (tela === 'peso') renderPeso();
   if (tela === 'inicio') renderInicio();
+  if (tela === 'comida') renderRecentes();
   if (tela === 'ajustes') preencherPerfil();
+  esconderDica();
   window.scrollTo(0, 0);
 }
 
 document.querySelectorAll('[data-ir]').forEach((b) => b.addEventListener('click', () => irPara(b.dataset.ir)));
+
+// ---------- Início ----------
+
+const ANEIS = [
+  { cor: 'var(--cal)', r: 88 },
+  { cor: 'var(--prot)', r: 65 },
+  { cor: 'var(--agua)', r: 42 },
+];
+
+function desenharAneis(progressos) {
+  $('aneis').innerHTML = ANEIS.map(({ cor, r }, i) => {
+    const p = Math.max(0, progressos[i] || 0);
+    const c = 2 * Math.PI * r;
+    const primeira = Math.min(p, 1);
+    const extra = Math.min(Math.max(p - 1, 0), 1);
+    return `<circle class="trilha" cx="100" cy="100" r="${r}" stroke="${cor}" stroke-opacity=".22"/>
+      <circle class="arco" cx="100" cy="100" r="${r}" stroke="${cor}"
+        stroke-dasharray="${c}" stroke-dashoffset="${c * (1 - primeira)}" ${primeira === 0 ? 'stroke-opacity="0"' : ''}/>
+      ${extra > 0 ? `<circle class="volta" cx="100" cy="100" r="${r}" stroke="${cor}" stroke-dasharray="${c}" stroke-dashoffset="${c * (1 - extra)}"/>` : ''}`;
+  }).join('');
+}
 
 function renderInicio() {
   const dia = hoje();
@@ -148,52 +204,170 @@ function renderInicio() {
 
   const kg = pesoAtual();
   const p = dados.perfil;
-  const vImc = imc(kg, p.altura);
-  $('h-peso').textContent = kg ? fmt(kg, 1) : '–';
-  $('h-altura').textContent = p.altura ? fmt(p.altura) : '–';
-  $('h-imc').textContent = vImc ? fmt(vImc, 1) : '–';
-  $('h-imc-cat').textContent = categoriaImc(vImc);
-  $('aviso-perfil').hidden = Boolean(p.altura && p.idade && kg);
-  if (!kg && p.altura && p.idade) $('aviso-perfil').innerHTML = 'Lance seu peso na aba <b>Peso</b> para calcular IMC e metas.';
+  const perfilOk = Boolean(p.altura && p.idade && p.sexo);
+  const aviso = $('aviso-perfil');
+  aviso.hidden = perfilOk && Boolean(kg);
+  aviso.innerHTML = !perfilOk
+    ? 'Complete seu perfil em <b>Ajustes</b> (altura, idade e sexo) para calcular suas metas.'
+    : 'Lance seu peso na aba <b>Peso</b> para calcular IMC e metas.';
 
-  const comidas = dados.comidas.filter((c) => c.data === dia);
-  const ativs = dados.atividades.filter((a) => a.data === dia);
-  const comi = comidas.reduce((s, c) => s + Number(c.kcal), 0);
-  const prot = comidas.reduce((s, c) => s + Number(c.prot), 0);
-  const queimei = ativs.reduce((s, a) => s + Number(a.kcal), 0);
-
+  const t = totaisDoDia(dia);
   const m = metaCalorias();
-  const total = m ? m.meta + queimei : null;
-  $('h-cal-comi').textContent = fmt(comi);
-  $('h-cal-queimei').textContent = fmt(queimei);
-  $('h-cal-meta').textContent = m ? `meta ${fmt(m.meta)} + ${fmt(queimei)} exercício` : 'complete o perfil';
-  const resta = total != null ? total - comi : null;
-  $('h-cal-resta').textContent = resta != null ? fmt(resta) : '–';
-  $('h-cal-resta').classList.toggle('negativo', resta != null && resta < 0);
-  const barraCal = $('h-cal-barra');
-  barraCal.style.width = total ? Math.min(100, (comi / total) * 100) + '%' : '0';
-  barraCal.classList.toggle('excedeu', resta != null && resta < 0);
-
+  const totalCal = m ? m.meta + t.queimei : null;
   const mp = metaProteina();
-  $('h-prot-comi').textContent = fmt(prot) + ' g';
-  $('h-prot-alvo').textContent = mp ? fmt(mp) + ' g' : '–';
-  $('h-prot-meta').textContent = mp ? `${fmt(p.protKg, 1)} g/kg` : '';
-  $('h-prot-resta').textContent = mp ? fmt(Math.max(0, mp - prot)) + ' g' : '–';
-  $('h-prot-barra').style.width = mp ? Math.min(100, (prot / mp) * 100) + '%' : '0';
+  const mc = metaCopos();
+
+  desenharAneis([totalCal ? t.comi / totalCal : 0, mp ? t.prot / mp : 0, t.copos / mc]);
+  $('l-cal').innerHTML = `${fmt(t.comi)}<small>/${totalCal ? fmt(totalCal) : '–'} kcal</small>`;
+  $('l-prot').innerHTML = `${fmt(t.prot)}<small>/${mp ? fmt(mp) : '–'} g</small>`;
+  $('l-agua').innerHTML = `${fmt((t.copos * ML_COPO) / 1000, 1)}<small>/${fmt((mc * ML_COPO) / 1000, 1)} L</small>`;
+
+  const resta = totalCal != null ? totalCal - t.comi : null;
+  $('h-cal-resta').textContent = resta != null ? fmt(Math.abs(resta)) : '–';
+  $('h-cal-resta').classList.toggle('negativo', resta != null && resta < 0);
+  $('h-cal-resta-txt').textContent = resta != null && resta < 0 ? 'kcal acima da meta' : 'kcal restantes';
+  $('h-cal-meta').textContent = m ? fmt(m.meta) : '–';
+  $('h-cal-queimei').textContent = fmt(t.queimei);
+  $('h-cal-comi').textContent = fmt(t.comi);
+
+  renderWidgets(t, kg, mc);
+  renderSemana();
+
+  const seq = sequenciaDias();
+  $('sequencia').hidden = seq < 2;
+  $('sequencia').textContent = `🔥 ${seq} dias`;
+  $('sequencia').title = `${seq} dias seguidos registrando refeições`;
 
   const itens = [
-    ...comidas.map((c) => ({ ...c, tipoItem: 'comida' })),
-    ...ativs.map((a) => ({ ...a, tipoItem: 'atividade' })),
+    ...t.comidas.map((c) => ({ ...c, tipoItem: 'comida' })),
+    ...t.ativs.map((a) => ({ ...a, tipoItem: 'atividade' })),
   ].sort((a, b) => b.id.localeCompare(a.id));
 
   $('lista-hoje-vazia').hidden = itens.length > 0;
   $('lista-hoje').innerHTML = itens.map((i) => i.tipoItem === 'comida'
     ? `<li><span class="icone">🍽️</span><span class="info"><b>${esc(i.nome)}</b><small>${fmt(i.prot)} g proteína</small></span>
         <span class="num">${fmt(i.kcal)} kcal</span><button class="apagar" data-apagar="comidas:${i.id}" aria-label="Apagar">✕</button></li>`
-    : `<li><span class="icone">🏃</span><span class="info"><b>${esc(i.nome)}</b><small>${fmt(i.min)} min · ${i.fonte === 'relogio' ? 'relógio' : 'estimado'}</small></span>
-        <span class="num destaque">−${fmt(i.kcal)} kcal</span><button class="apagar" data-apagar="atividades:${i.id}" aria-label="Apagar">✕</button></li>`
+    : `<li><span class="icone ativ">🏃</span><span class="info"><b>${esc(i.nome)}</b><small>${fmt(i.min)} min · ${i.fonte === 'relogio' ? 'relógio' : 'estimado'}</small></span>
+        <span class="num ganho">+${fmt(i.kcal)} kcal</span><button class="apagar" data-apagar="atividades:${i.id}" aria-label="Apagar">✕</button></li>`
   ).join('');
 }
+
+function renderWidgets(t, kg, mc) {
+  // Peso: valor, variação em 7 dias e minigráfico
+  const lista = pesosOrdenados();
+  $('w-peso').textContent = kg ? fmt(kg, 1) : '–';
+  const difEl = $('w-peso-dif');
+  difEl.className = 'w-sub';
+  if (lista.length >= 2) {
+    const limite = diasAtras(7);
+    const ref = [...lista].reverse().find((x) => x.data <= limite) || lista[0];
+    const dif = kg - ref.kg;
+    const dias = Math.round((new Date(lista.at(-1).data) - new Date(ref.data)) / 86400000);
+    difEl.textContent = `${dif > 0 ? '+' : dif < 0 ? '−' : ''}${fmt(Math.abs(dif), 1)} kg em ${dias} dias`;
+    const objetivo = Number(dados.perfil.objetivo);
+    if (Math.abs(dif) >= 0.1 && objetivo !== 0) difEl.classList.add(Math.sign(dif) === Math.sign(objetivo) ? 'bom' : 'ruim');
+  } else {
+    difEl.textContent = kg ? 'lance mais pesos' : 'toque para lançar';
+  }
+  const pts = lista.slice(-10);
+  if (pts.length >= 2) {
+    const vals = pts.map((x) => x.kg);
+    const min = Math.min(...vals), max = Math.max(...vals), amp = max - min || 1;
+    const x = (i) => (i / (pts.length - 1)) * 100;
+    const y = (v) => 24 - ((v - min) / amp) * 20;
+    $('w-peso-linha').innerHTML = `<path d="${pts.map((pt, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(pt.kg).toFixed(1)}`).join(' ')}"/>`;
+  } else {
+    $('w-peso-linha').innerHTML = '';
+  }
+
+  // IMC com escala colorida
+  const vImc = imc(kg, dados.perfil.altura);
+  $('w-imc').textContent = vImc ? fmt(vImc, 1) : '–';
+  $('w-imc-cat').textContent = vImc ? categoriaImc(vImc) : 'precisa de peso e altura';
+  const marca = $('w-imc-marca');
+  if (vImc) {
+    const faixas = [[15, 18.5], [18.5, 25], [25, 30], [30, 40]];
+    const idx = Math.min(faixas.findIndex(([, fim]) => vImc < fim) >>> 0, 3);
+    const [ini, fim] = faixas[idx];
+    const frac = Math.min(Math.max((vImc - ini) / (fim - ini), 0), 1);
+    marca.style.left = `${((idx + frac) / 4) * 100}%`;
+    marca.hidden = false;
+  } else {
+    marca.hidden = true;
+  }
+
+  // Água
+  $('w-agua').textContent = t.copos;
+  $('w-agua-meta').textContent = `de ${mc} copos`;
+
+  // Exercício
+  $('w-exerc').textContent = fmt(t.queimei);
+  $('w-exerc-min').textContent = `${fmt(t.minutos)} min hoje`;
+}
+
+function mudarAgua(delta) {
+  const dia = hoje();
+  dados.agua[dia] = Math.max(0, Number(dados.agua[dia] || 0) + delta);
+  salvar();
+  renderInicio();
+}
+$('agua-mais').addEventListener('click', () => mudarAgua(1));
+$('agua-menos').addEventListener('click', () => mudarAgua(-1));
+
+// Barras de calorias dos últimos 7 dias, com a meta de cada dia marcada
+function renderSemana() {
+  const m = metaCalorias();
+  const dias = Array.from({ length: 7 }, (_, i) => {
+    const iso = diasAtras(6 - i);
+    const t = totaisDoDia(iso);
+    return { iso, comi: t.comi, meta: m ? m.meta + t.queimei : null };
+  });
+  const comDados = dias.filter((d) => d.comi > 0);
+  $('semana-media').textContent = comDados.length
+    ? `média ${fmt(comDados.reduce((s, d) => s + d.comi, 0) / comDados.length)} kcal`
+    : '';
+
+  const W = 320, H = 150, mt = 8, mb = 22;
+  const topo = Math.max(...dias.map((d) => Math.max(d.comi, d.meta || 0)), 500) * 1.08;
+  const larg = W / 7;
+  const bw = 22;
+  const y = (v) => mt + (1 - v / topo) * (H - mt - mb);
+  const nomes = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
+
+  $('grafico-semana').innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Calorias consumidas nos últimos 7 dias">
+    ${dias.map((d, i) => {
+      const cx = larg * i + larg / 2;
+      const ehHoje = i === 6;
+      const h = d.comi > 0 ? Math.max(H - mb - y(d.comi), 4) : 0;
+      const top = H - mb - h;
+      // barra com topo arredondado e base reta
+      const barra = h > 0
+        ? `<path class="barra-dia ${ehHoje ? 'hoje' : 'passado'}" d="M${cx - bw / 2},${H - mb} V${top + 4} q0,-4 4,-4 h${bw - 8} q4,0 4,4 V${H - mb} Z"/>`
+        : '';
+      const meta = d.meta ? `<line class="meta-dia" x1="${cx - bw / 2 - 4}" x2="${cx + bw / 2 + 4}" y1="${y(d.meta)}" y2="${y(d.meta)}"/>` : '';
+      const dow = nomes[new Date(d.iso + 'T12:00').getDay()];
+      const dica = `${dow} ${dataCurta(d.iso)}: ${fmt(d.comi)} kcal${d.meta ? ` de ${fmt(d.meta)}` : ''}`;
+      return `${barra}${meta}
+        <text x="${cx}" y="${H - 6}" text-anchor="middle" class="${ehHoje ? 'hoje' : ''}">${ehHoje ? 'hoje' : dow}</text>
+        <rect class="alvo" x="${larg * i}" y="0" width="${larg}" height="${H}" data-dica="${esc(dica)}"/>`;
+    }).join('')}
+  </svg>`;
+}
+
+// Dica ao tocar/passar o dedo nas barras
+function mostrarDica(alvo) {
+  const r = alvo.getBoundingClientRect();
+  const d = $('dica');
+  d.textContent = alvo.dataset.dica;
+  d.style.left = `${Math.min(Math.max(r.left + r.width / 2, 90), window.innerWidth - 90)}px`;
+  d.style.top = `${r.top + 4}px`;
+  d.hidden = false;
+}
+function esconderDica() { $('dica').hidden = true; }
+$('grafico-semana').addEventListener('pointerover', (e) => { if (e.target.dataset.dica) mostrarDica(e.target); });
+$('grafico-semana').addEventListener('pointerdown', (e) => { if (e.target.dataset.dica) mostrarDica(e.target); });
+$('grafico-semana').addEventListener('pointerleave', esconderDica);
+window.addEventListener('scroll', esconderDica, { passive: true });
 
 document.addEventListener('click', (e) => {
   const b = e.target.closest('[data-apagar]');
@@ -221,7 +395,7 @@ $('form-peso').addEventListener('submit', (e) => {
 });
 
 function renderPeso() {
-  const lista = [...dados.pesos].sort((a, b) => a.data.localeCompare(b.data));
+  const lista = pesosOrdenados();
   const el = $('grafico-peso');
 
   if (lista.length >= 2) {
@@ -325,40 +499,61 @@ Quando a descrição informar quantidades, use-as; quando não, estime pelo tama
 Use valores de tabelas como TACO/TBCA. Prefira estimativas realistas a otimistas.
 Responda em português.`;
 
-async function analisarRefeicao(descricao, imagem) {
-  const conteudo = [];
-  if (imagem) conteudo.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: imagem } });
-  conteudo.push({ type: 'text', text: descricao ? `Descrição: ${descricao}` : 'Estime a refeição da foto.' });
+// Traduz os erros da API para mensagens que a pessoa consegue resolver
+function mensagemDeErro(status, msg) {
+  const m = String(msg || '').toLowerCase();
+  if (status === 401) return 'Chave inválida. Copie a chave de novo em platform.claude.com → API Keys (ela começa com sk-ant-).';
+  if (status === 400 && m.includes('credit')) return 'Sua conta da API está sem créditos. Adicione em platform.claude.com → Billing.';
+  if (status === 403) return 'Esta chave não tem permissão para usar o modelo. Confira a chave e o workspace em platform.claude.com.';
+  if (status === 429) return 'Limite de uso atingido. Espere um minuto e tente de novo.';
+  if (status === 529 || status >= 500) return 'O serviço está ocupado agora. Tente de novo em instantes.';
+  return `Erro ${status}: ${msg || 'falha ao chamar a API.'}`;
+}
 
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+async function chamarClaude(corpo) {
+  const enviar = (comFallback) => fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
       'x-api-key': dados.chave,
       'anthropic-version': '2023-06-01',
-      'anthropic-beta': 'server-side-fallback-2026-07-01',
       'anthropic-dangerous-direct-browser-access': 'true',
+      ...(comFallback ? { 'anthropic-beta': 'server-side-fallback-2026-07-01' } : {}),
     },
-    body: JSON.stringify({
-      model: MODELO,
-      max_tokens: 16000,
-      fallbacks: 'default',
-      system: SISTEMA_REFEICAO,
-      output_config: { effort: 'medium', format: { type: 'json_schema', schema: ESQUEMA_REFEICAO } },
-      messages: [{ role: 'user', content: conteudo }],
-    }),
+    body: JSON.stringify(comFallback ? { ...corpo, fallbacks: 'default' } : corpo),
   });
 
-  const corpo = await resp.json().catch(() => ({}));
-  if (!resp.ok) {
-    if (resp.status === 401) throw new Error('Chave da API inválida. Confira em Ajustes.');
-    if (resp.status === 429) throw new Error('Muitas requisições. Tente de novo em instantes.');
-    throw new Error(corpo?.error?.message || `Erro ${resp.status} ao calcular.`);
+  let resp;
+  try {
+    resp = await enviar(true);
+  } catch {
+    throw new Error('Sem conexão com a API. Verifique a internet e tente de novo.');
   }
-  if (corpo.stop_reason === 'refusal') throw new Error('Não foi possível analisar esta refeição. Lance os valores manualmente.');
-  if (corpo.stop_reason === 'max_tokens') throw new Error('A resposta veio incompleta. Tente de novo.');
+  let json = await resp.json().catch(() => ({}));
+  // Se a conta não aceitar o recurso de fallback, tenta de novo sem ele
+  if (resp.status === 400 && /fallback|beta/i.test(json?.error?.message || '')) {
+    resp = await enviar(false);
+    json = await resp.json().catch(() => ({}));
+  }
+  if (!resp.ok) throw new Error(mensagemDeErro(resp.status, json?.error?.message));
+  if (json.stop_reason === 'refusal') throw new Error('Não foi possível analisar. Lance os valores manualmente.');
+  if (json.stop_reason === 'max_tokens') throw new Error('A resposta veio incompleta. Tente de novo.');
+  return json;
+}
 
-  const texto = (corpo.content || []).find((b) => b.type === 'text')?.text;
+async function analisarRefeicao(descricao, imagem) {
+  const conteudo = [];
+  if (imagem) conteudo.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: imagem } });
+  conteudo.push({ type: 'text', text: descricao ? `Descrição: ${descricao}` : 'Estime a refeição da foto.' });
+
+  const resp = await chamarClaude({
+    model: MODELO,
+    max_tokens: 16000,
+    system: SISTEMA_REFEICAO,
+    output_config: { effort: 'medium', format: { type: 'json_schema', schema: ESQUEMA_REFEICAO } },
+    messages: [{ role: 'user', content: conteudo }],
+  });
+  const texto = (resp.content || []).find((b) => b.type === 'text')?.text;
   if (!texto) throw new Error('Resposta vazia. Tente de novo.');
   return JSON.parse(texto);
 }
@@ -391,6 +586,34 @@ $('form-comida-ia').addEventListener('submit', async (e) => {
   } finally {
     btn.disabled = false;
   }
+});
+
+// Refeições recentes (sem repetir o nome) para lançar de novo com um toque
+function renderRecentes() {
+  const vistos = new Set();
+  const recentes = [...dados.comidas].sort((a, b) => b.id.localeCompare(a.id)).filter((c) => {
+    const k = c.nome.toLowerCase();
+    if (vistos.has(k)) return false;
+    vistos.add(k);
+    return true;
+  }).slice(0, 6);
+  $('card-recentes').hidden = recentes.length === 0;
+  $('recentes').innerHTML = recentes.map((c) =>
+    `<button type="button" class="chip" data-repetir="${c.id}">${esc(c.nome)}<small>${fmt(c.kcal)} kcal · ${fmt(c.prot)} g</small></button>`
+  ).join('');
+}
+
+$('recentes').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-repetir]');
+  if (!b) return;
+  const c = dados.comidas.find((x) => x.id === b.dataset.repetir);
+  if (!c) return;
+  $('comida-nome').value = c.nome;
+  $('comida-kcal').value = c.kcal;
+  $('comida-prot').value = c.prot;
+  $('comida-data').value = hoje();
+  $('comida-form-titulo').textContent = 'Confira e salve';
+  $('form-comida').scrollIntoView({ behavior: 'smooth' });
 });
 
 $('form-comida').addEventListener('submit', (e) => {
@@ -463,10 +686,11 @@ function preencherPerfil() {
   $('perf-nivel').value = String(p.nivel ?? 1.2);
   $('perf-objetivo').value = String(p.objetivo ?? 0);
   $('perf-prot').value = p.protKg ?? 1.6;
+  $('perf-agua').value = p.aguaMlKg ?? 35;
   $('ia-chave').value = dados.chave || '';
   const m = metaCalorias();
   $('perf-calculo').textContent = m
-    ? `Metabolismo basal ≈ ${fmt(m.tmb)} kcal. Meta diária (sem exercícios) = ${fmt(m.meta)} kcal.`
+    ? `Metabolismo basal ≈ ${fmt(m.tmb)} kcal. Meta diária (sem exercícios) = ${fmt(m.meta)} kcal. Água: ${metaCopos()} copos.`
     : '';
 }
 
@@ -479,17 +703,46 @@ $('form-perfil').addEventListener('submit', (e) => {
     nivel: parseFloat($('perf-nivel').value),
     objetivo: parseInt($('perf-objetivo').value, 10),
     protKg: parseFloat($('perf-prot').value),
+    aguaMlKg: parseFloat($('perf-agua').value),
   };
   salvar();
   preencherPerfil();
   toast('Perfil salvo');
 });
 
-$('form-ia').addEventListener('submit', (e) => {
+$('form-ia').addEventListener('submit', async (e) => {
   e.preventDefault();
-  dados.chave = $('ia-chave').value.trim();
-  salvar();
-  toast(dados.chave ? 'Chave salva' : 'Chave removida');
+  const chave = $('ia-chave').value.trim().replace(/\s+/g, '');
+  const status = $('ia-status');
+  if (!chave) {
+    dados.chave = '';
+    salvar();
+    status.textContent = 'Chave removida.';
+    return;
+  }
+  if (!chave.startsWith('sk-ant-')) {
+    status.textContent = 'A chave deve começar com “sk-ant-”. Confira se copiou inteira.';
+    return;
+  }
+  const antiga = dados.chave;
+  dados.chave = chave;
+  $('btn-chave').disabled = true;
+  status.textContent = 'Testando a conexão…';
+  try {
+    await chamarClaude({
+      model: MODELO,
+      max_tokens: 1024,
+      output_config: { effort: 'low' },
+      messages: [{ role: 'user', content: 'Responda apenas: ok' }],
+    });
+    salvar();
+    status.textContent = '✅ Conectado! Já pode calcular refeições por foto.';
+  } catch (err) {
+    dados.chave = antiga;
+    status.textContent = '❌ ' + err.message;
+  } finally {
+    $('btn-chave').disabled = false;
+  }
 });
 
 $('btn-exportar').addEventListener('click', () => {
@@ -509,8 +762,9 @@ $('arq-importar').addEventListener('change', async (e) => {
     const lido = JSON.parse(await arq.text());
     if (!Array.isArray(lido.pesos) || !Array.isArray(lido.comidas)) throw new Error();
     if (!confirm('Substituir os dados atuais pelos do backup?')) return;
-    dados = { ...carregar(), ...lido, chave: dados.chave };
-    salvar();
+    const chave = dados.chave;
+    localStorage.setItem(CHAVE_DADOS, JSON.stringify({ ...lido, chave }));
+    dados = carregar();
     preencherPerfil();
     toast('Backup importado');
     irPara('inicio');
@@ -525,7 +779,7 @@ $('arq-importar').addEventListener('change', async (e) => {
 
 preencherPerfil();
 irPara(dados.perfil.altura ? 'inicio' : 'ajustes');
-if (!dados.perfil.altura) renderInicio();
+renderInicio();
 
 // Atualiza quando volta para o app (ex.: virou o dia)
 document.addEventListener('visibilitychange', () => {

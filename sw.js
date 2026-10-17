@@ -1,6 +1,6 @@
 // Guarda os arquivos do app para funcionar offline.
 // Ao mudar algum arquivo, aumente a versão para os celulares baixarem a nova.
-const VERSAO = 'saude-v1';
+const VERSAO = 'saude-v2';
 const ARQUIVOS = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png', 'icon-180.png'];
 
 self.addEventListener('install', (e) => {
