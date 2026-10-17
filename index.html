@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Saúde</title>
+  <meta name="description" content="Controle de peso, IMC, calorias e proteínas do dia.">
+  <meta name="theme-color" content="#0f766e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Saúde">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1 id="titulo">Hoje</h1>
+    <span id="data-hoje" class="muted"></span>
+  </header>
+
+  <main>
+    <!-- INÍCIO -->
+    <section id="tela-inicio" class="tela ativa">
+      <div id="aviso-perfil" class="card aviso" hidden>
+        Complete seu perfil em <b>Ajustes</b> (altura, idade, sexo) para calcular IMC e metas.
+      </div>
+
+      <div class="grid3">
+        <div class="stat"><span class="rotulo">Peso</span><span class="valor" id="h-peso">–</span><span class="unid">kg</span></div>
+        <div class="stat"><span class="rotulo">Altura</span><span class="valor" id="h-altura">–</span><span class="unid">cm</span></div>
+        <div class="stat"><span class="rotulo">IMC</span><span class="valor" id="h-imc">–</span><span class="unid" id="h-imc-cat"></span></div>
+      </div>
+
+      <div class="card">
+        <div class="linha-titulo"><h2>Calorias</h2><span class="muted" id="h-cal-meta"></span></div>
+        <div class="barra"><div class="preenchido" id="h-cal-barra"></div></div>
+        <div class="grid3 compacto">
+          <div><span class="rotulo">Comi</span><b id="h-cal-comi">0</b></div>
+          <div><span class="rotulo">Queimei</span><b id="h-cal-queimei">0</b></div>
+          <div><span class="rotulo">Ainda posso</span><b id="h-cal-resta" class="destaque">0</b></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="linha-titulo"><h2>Proteínas</h2><span class="muted" id="h-prot-meta"></span></div>
+        <div class="barra prot"><div class="preenchido" id="h-prot-barra"></div></div>
+        <div class="grid3 compacto">
+          <div><span class="rotulo">Comi</span><b id="h-prot-comi">0 g</b></div>
+          <div><span class="rotulo">Meta</span><b id="h-prot-alvo">0 g</b></div>
+          <div><span class="rotulo">Falta</span><b id="h-prot-resta" class="destaque">0 g</b></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Lançamentos de hoje</h2>
+        <ul id="lista-hoje" class="lista"></ul>
+        <p id="lista-hoje-vazia" class="muted">Nada lançado ainda hoje.</p>
+      </div>
+
+      <div class="acoes-rapidas">
+        <button class="btn" data-ir="comida">+ Refeição</button>
+        <button class="btn sec" data-ir="atividade">+ Atividade</button>
+        <button class="btn sec" data-ir="peso">+ Peso</button>
+      </div>
+    </section>
+
+    <!-- PESO -->
+    <section id="tela-peso" class="tela">
+      <form id="form-peso" class="card">
+        <h2>Lançar peso</h2>
+        <label>Peso (kg)
+          <input type="number" id="peso-valor" step="0.1" min="20" max="400" inputmode="decimal" required>
+        </label>
+        <label>Data
+          <input type="date" id="peso-data" required>
+        </label>
+        <button class="btn" type="submit">Salvar peso</button>
+      </form>
+
+      <div class="card">
+        <h2>Evolução</h2>
+        <div id="grafico-peso"></div>
+        <ul id="lista-peso" class="lista"></ul>
+      </div>
+    </section>
+
+    <!-- COMIDA -->
+    <section id="tela-comida" class="tela">
+      <form id="form-comida-ia" class="card">
+        <h2>Foto da refeição</h2>
+        <label class="foto-area" for="comida-foto">
+          <img id="comida-preview" alt="" hidden>
+          <span id="comida-foto-texto">📷 Toque para tirar foto (opcional)</span>
+        </label>
+        <input type="file" id="comida-foto" accept="image/*" capture="environment" hidden>
+        <label>Descrição
+          <textarea id="comida-desc" rows="3" placeholder="Ex.: 1 concha de feijão, 4 colheres de arroz, 1 filé de frango grelhado médio, salada"></textarea>
+        </label>
+        <button class="btn" type="submit" id="btn-calcular">Calcular calorias e proteínas</button>
+        <p id="comida-status" class="muted"></p>
+      </form>
+
+      <form id="form-comida" class="card">
+        <h2 id="comida-form-titulo">Lançar refeição</h2>
+        <div id="comida-itens"></div>
+        <label>Nome
+          <input type="text" id="comida-nome" placeholder="Almoço" required>
+        </label>
+        <div class="grid2">
+          <label>Calorias (kcal)
+            <input type="number" id="comida-kcal" min="0" step="1" inputmode="numeric" required>
+          </label>
+          <label>Proteínas (g)
+            <input type="number" id="comida-prot" min="0" step="0.1" inputmode="decimal" required>
+          </label>
+        </div>
+        <label>Data
+          <input type="date" id="comida-data" required>
+        </label>
+        <button class="btn" type="submit">Salvar refeição</button>
+      </form>
+    </section>
+
+    <!-- ATIVIDADE -->
+    <section id="tela-atividade" class="tela">
+      <form id="form-atividade" class="card">
+        <h2>Lançar atividade</h2>
+        <label>Atividade
+          <select id="ativ-tipo"></select>
+        </label>
+        <label>Tempo (minutos)
+          <input type="number" id="ativ-min" min="1" max="600" step="1" inputmode="numeric" required>
+        </label>
+        <p class="estimativa">Estimativa: <b id="ativ-estimativa">–</b></p>
+        <label>Medido no relógio (kcal) <span class="muted">— opcional, substitui a estimativa</span>
+          <input type="number" id="ativ-relogio" min="0" step="1" inputmode="numeric">
+        </label>
+        <label>Data
+          <input type="date" id="ativ-data" required>
+        </label>
+        <button class="btn" type="submit">Salvar atividade</button>
+      </form>
+    </section>
+
+    <!-- AJUSTES -->
+    <section id="tela-ajustes" class="tela">
+      <form id="form-perfil" class="card">
+        <h2>Meu perfil</h2>
+        <div class="grid2">
+          <label>Altura (cm)
+            <input type="number" id="perf-altura" min="100" max="250" step="1" inputmode="numeric" required>
+          </label>
+          <label>Idade
+            <input type="number" id="perf-idade" min="10" max="120" step="1" inputmode="numeric" required>
+          </label>
+        </div>
+        <label>Sexo (para a fórmula de metabolismo)
+          <select id="perf-sexo" required>
+            <option value="">Selecione</option>
+            <option value="f">Feminino</option>
+            <option value="m">Masculino</option>
+          </select>
+        </label>
+        <label>Rotina fora dos exercícios
+          <select id="perf-nivel">
+            <option value="1.2">Pouco movimento (trabalho sentado)</option>
+            <option value="1.3">Movimento leve (anda bastante, fica em pé)</option>
+            <option value="1.4">Movimento intenso (trabalho físico)</option>
+          </select>
+        </label>
+        <p class="muted pequeno">Os exercícios lançados são somados à parte — não inclua treino aqui.</p>
+        <label>Objetivo
+          <select id="perf-objetivo">
+            <option value="0">Manter o peso</option>
+            <option value="-300">Perder devagar (−300 kcal/dia)</option>
+            <option value="-500">Perder (−500 kcal/dia)</option>
+            <option value="300">Ganhar (+300 kcal/dia)</option>
+          </select>
+        </label>
+        <label>Proteína (g por kg de peso)
+          <input type="number" id="perf-prot" min="0.6" max="3" step="0.1" inputmode="decimal" required>
+        </label>
+        <button class="btn" type="submit">Salvar perfil</button>
+        <p class="muted pequeno" id="perf-calculo"></p>
+      </form>
+
+      <form id="form-ia" class="card">
+        <h2>Cálculo por foto (IA)</h2>
+        <p class="muted pequeno">
+          Para calcular calorias a partir da foto/descrição, o app usa o Claude. Crie uma chave em
+          <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener">platform.claude.com</a>
+          e cole aqui. Ela fica salva só neste celular.
+        </p>
+        <label>Chave da API
+          <input type="password" id="ia-chave" autocomplete="off" placeholder="sk-ant-...">
+        </label>
+        <button class="btn" type="submit">Salvar chave</button>
+      </form>
+
+      <div class="card">
+        <h2>Backup</h2>
+        <p class="muted pequeno">Os dados ficam só neste aparelho. Exporte de vez em quando para não perder.</p>
+        <div class="grid2">
+          <button class="btn sec" id="btn-exportar" type="button">Exportar</button>
+          <label class="btn sec">Importar<input type="file" id="arq-importar" accept="application/json" hidden></label>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <nav class="abas">
+    <button data-ir="inicio" class="ativa"><span>🏠</span>Início</button>
+    <button data-ir="peso"><span>⚖️</span>Peso</button>
+    <button data-ir="comida"><span>🍽️</span>Comida</button>
+    <button data-ir="atividade"><span>🏃</span>Atividade</button>
+    <button data-ir="ajustes"><span>⚙️</span>Ajustes</button>
+  </nav>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
